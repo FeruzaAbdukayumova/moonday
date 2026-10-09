@@ -2,7 +2,17 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { clockBadge, textCard, titleCard } from './cards.ts';
-import { COVER_FILTER, ffmpeg, FILM_HEIGHT, FILM_WIDTH, FPS, probe, SEGMENT_OUTPUT_ARGS } from './ffmpeg.ts';
+import {
+  COVER_FILTER,
+  ffmpeg,
+  FILM_HEIGHT,
+  FILM_WIDTH,
+  FPS,
+  type MediaFormat,
+  probe,
+  SEGMENT_OUTPUT_ARGS,
+  untrustedInput,
+} from './ffmpeg.ts';
 
 export const MAX_CLIP_SECONDS = 6;
 const PHOTO_SECONDS = 2.5;
@@ -10,7 +20,7 @@ const TEXT_SECONDS = 3;
 const TITLE_SECONDS = 2;
 
 export type FilmMoment =
-  | { kind: 'video' | 'photo'; clock: string; path: string }
+  | { kind: 'video' | 'photo'; clock: string; path: string; format: MediaFormat }
   | { kind: 'text'; clock: string; text: string };
 
 export type FilmRequest = { day: string; moments: FilmMoment[] };
@@ -39,13 +49,13 @@ async function stillSegment(
   ]);
 }
 
-async function videoSegment(input: string, badge: string, output: string) {
-  const info = await probe(input);
+async function videoSegment(input: string, format: MediaFormat, badge: string, output: string) {
+  const info = await probe(input, format);
   if (!info.hasVideo) throw new Error('clip has no video stream');
   const seconds = Math.min(info.duration || MAX_CLIP_SECONDS, MAX_CLIP_SECONDS);
 
   await ffmpeg([
-    '-t', String(seconds), '-i', input,
+    '-t', String(seconds), ...untrustedInput(input, format),
     '-i', badge,
     ...SILENCE,
     '-filter_complex', `[0:v]fps=${FPS},${COVER_FILTER}[base];[base][1:v]overlay=0:0,format=yuv420p[v]`,
@@ -87,11 +97,11 @@ export async function renderFilm(
       } else {
         const badge = join(workDir, `badge-${index}.png`);
         await writeFile(badge, clockBadge(moment.clock));
-        if (moment.kind === 'video') await videoSegment(moment.path, badge, segment);
+        if (moment.kind === 'video') await videoSegment(moment.path, moment.format, badge, segment);
         else {
           // Decode once to PNG: covers HEIC and applies EXIF rotation, and PNG loops cleanly.
           const still = join(workDir, `photo-${index}.png`);
-          await ffmpeg(['-i', moment.path, '-frames:v', '1', still]);
+          await ffmpeg([...untrustedInput(moment.path, moment.format), '-frames:v', '1', still]);
           await stillSegment(still, PHOTO_SECONDS, segment, { zoom: true, badge });
         }
       }
@@ -107,6 +117,6 @@ export async function renderFilm(
 
   const list = join(workDir, 'segments.txt');
   await writeFile(list, segments.map((s) => `file '${s.replaceAll("'", "'\\''")}'`).join('\n'));
-  await ffmpeg(['-f', 'concat', '-safe', '0', '-i', list, '-c', 'copy', '-movflags', '+faststart', output]);
+  await ffmpeg(['-protocol_whitelist', 'file', '-f', 'concat', '-safe', '0', '-i', list, '-c', 'copy', '-movflags', '+faststart', output]);
   step();
 }

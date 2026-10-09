@@ -38,11 +38,45 @@ export function ffmpeg(args: string[]) {
   return run('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', ...args]);
 }
 
+/**
+ * The containers phones actually produce. Uploads are sniffed into one of these and
+ * the demuxer is forced, so ffmpeg never guesses: a crafted upload can't pose as an
+ * HLS playlist or concat script and make ffmpeg read other files or fetch URLs.
+ * The mov demuxer covers mp4/mov/3gp video and HEIC photos.
+ */
+export type MediaFormat = 'mov' | 'matroska' | 'jpeg_pipe' | 'png_pipe';
+
+const FORMATS_BY_KIND = {
+  video: ['mov', 'matroska'],
+  photo: ['mov', 'jpeg_pipe', 'png_pipe'],
+} as const satisfies Record<string, MediaFormat[]>;
+
+function sniff(head: Uint8Array): MediaFormat | null {
+  const ascii = (from: number, to: number) => String.fromCharCode(...head.subarray(from, to));
+  if (ascii(4, 8) === 'ftyp') return 'mov';
+  if (head[0] === 0x1a && head[1] === 0x45 && head[2] === 0xdf && head[3] === 0xa3) return 'matroska';
+  if (head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return 'jpeg_pipe';
+  if (head[0] === 0x89 && ascii(1, 4) === 'PNG') return 'png_pipe';
+  return null;
+}
+
+/** The forced demuxer for an upload, or null when it isn't a format this kind of moment accepts. */
+export function mediaFormat(kind: keyof typeof FORMATS_BY_KIND, head: Uint8Array): MediaFormat | null {
+  const format = sniff(head);
+  return format && (FORMATS_BY_KIND[kind] as readonly MediaFormat[]).includes(format) ? format : null;
+}
+
+/** `-i` for a file we didn't write ourselves: local files only, demuxer pinned. */
+export function untrustedInput(path: string, format: MediaFormat) {
+  return ['-protocol_whitelist', 'file', '-f', format, '-i', path];
+}
+
 export type Probe = { duration: number; hasAudio: boolean; hasVideo: boolean };
 
-export async function probe(path: string): Promise<Probe> {
+export async function probe(path: string, format: MediaFormat): Promise<Probe> {
   const output = await run('ffprobe', [
-    '-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', path,
+    '-v', 'error', '-print_format', 'json', '-show_format', '-show_streams',
+    '-protocol_whitelist', 'file', '-f', format, path,
   ]);
   const info = JSON.parse(output) as {
     format?: { duration?: string };

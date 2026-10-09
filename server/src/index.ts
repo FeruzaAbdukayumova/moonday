@@ -5,11 +5,12 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 
+import { mediaFormat } from './ffmpeg.ts';
 import { renderFilm, type FilmMoment } from './render.ts';
 
 const PORT = Number(process.env.PORT ?? 4000);
 const DATA_DIR = process.env.DATA_DIR ?? join(import.meta.dirname, '..', 'data');
-const MAX_UPLOAD_BYTES = 500 * 1024 * 1024;
+const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_MB ?? 500) * 1024 * 1024;
 const MAX_MOMENTS = 60;
 const KEEP_FILMS_MS = 24 * 60 * 60 * 1000;
 
@@ -60,11 +61,27 @@ async function createFilm(req: IncomingMessage, res: ServerResponse) {
     return send(res, 413, { error: 'upload too large' });
   }
 
+  // Content-Length is only a promise (and absent on chunked uploads), so count the
+  // bytes as they arrive too; formData() buffers everything in memory.
+  let received = 0;
+  let tooLarge = false;
+  const body = (Readable.toWeb(req) as ReadableStream<Uint8Array>).pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        received += chunk.byteLength;
+        if (received > MAX_UPLOAD_BYTES) {
+          tooLarge = true;
+          controller.error(new Error('upload too large'));
+        } else controller.enqueue(chunk);
+      },
+    })
+  );
+
   // Node's built-in Request parses multipart for us, no upload library needed.
   const request = new Request(`http://localhost${req.url}`, {
     method: 'POST',
     headers: req.headers as Record<string, string>,
-    body: Readable.toWeb(req) as ReadableStream,
+    body,
     duplex: 'half',
   } as RequestInit);
 
@@ -74,6 +91,10 @@ async function createFilm(req: IncomingMessage, res: ServerResponse) {
     form = await request.formData();
     manifest = parseManifest(form.get('manifest'));
   } catch (error) {
+    if (tooLarge) {
+      res.setHeader('Connection', 'close');
+      return send(res, 413, { error: 'upload too large' });
+    }
     return send(res, 400, { error: (error as Error).message });
   }
 
@@ -93,9 +114,12 @@ async function createFilm(req: IncomingMessage, res: ServerResponse) {
 
     const upload = m.file ? form.get(m.file) : null;
     if (!(upload instanceof File)) continue;
+    const bytes = Buffer.from(await upload.arrayBuffer());
+    const format = mediaFormat(m.kind, bytes.subarray(0, 16));
+    if (!format) continue;
     const path = join(inputs, String(index).padStart(3, '0'));
-    await writeFile(path, Buffer.from(await upload.arrayBuffer()));
-    moments.push({ kind: m.kind, clock, path });
+    await writeFile(path, bytes);
+    moments.push({ kind: m.kind, clock, path, format });
   }
 
   if (moments.length === 0) {
