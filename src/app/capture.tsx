@@ -13,6 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Icon } from '@/components/icon';
 import { Moon } from '@/components/moon';
 import { Bubble, Button } from '@/components/ui';
+import { VibeChips } from '@/components/vibe-picker';
 import { addMoment } from '@/lib/db';
 import { persistMedia } from '@/lib/media';
 import { MAX_CLIP_SECONDS, colors, fonts, radius, spacing } from '@/theme';
@@ -26,6 +27,7 @@ export default function CaptureScreen() {
     params.mode === 'picture' ? 'picture' : 'video'
   );
   const [facing, setFacing] = useState<CameraType>('back');
+  const [vibe, setVibe] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [recording, setRecording] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -89,7 +91,7 @@ export default function CaptureScreen() {
       if (video?.uri) {
         setSaving(true);
         const uri = await persistMedia(video.uri, 'video');
-        await addMoment(db, { kind: 'video', uri });
+        await addMoment(db, { kind: 'video', uri, vibe });
         router.back();
       }
     } finally {
@@ -106,7 +108,7 @@ export default function CaptureScreen() {
       const photo = await cameraRef.current.takePictureAsync({ quality: 0.8 });
       if (photo?.uri) {
         const uri = await persistMedia(photo.uri, 'photo');
-        await addMoment(db, { kind: 'photo', uri });
+        await addMoment(db, { kind: 'photo', uri, vibe });
         router.back();
       }
     } finally {
@@ -146,6 +148,8 @@ export default function CaptureScreen() {
           {recording && seconds >= 2 && (
             <Bubble style={styles.cheer}>Ooh, Oscar material.</Bubble>
           )}
+
+          {!recording && <VibeChips value={vibe} onChange={setVibe} dark />}
 
           <View style={styles.modeSwitch}>
             <ModeTab label="Video" active={mode === 'video'} disabled={recording} onPress={() => setMode('video')} />

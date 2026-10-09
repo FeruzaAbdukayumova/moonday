@@ -1,7 +1,7 @@
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { clockBadge, textCard, titleCard } from './cards.ts';
+import { clockBadge, endCard, textCard, titleCard } from './cards.ts';
 import {
   COVER_FILTER,
   ffmpeg,
@@ -18,12 +18,13 @@ export const MAX_CLIP_SECONDS = 6;
 const PHOTO_SECONDS = 2.5;
 const TEXT_SECONDS = 3;
 const TITLE_SECONDS = 2;
+const END_SECONDS = 2;
 
 export type FilmMoment =
-  | { kind: 'video' | 'photo'; clock: string; path: string; format: MediaFormat }
-  | { kind: 'text'; clock: string; text: string };
+  | { kind: 'video' | 'photo'; clock: string; vibe: string | null; path: string; format: MediaFormat }
+  | { kind: 'text'; clock: string; vibe: string | null; text: string };
 
-export type FilmRequest = { day: string; moments: FilmMoment[] };
+export type FilmRequest = { day: string; name: string; moments: FilmMoment[] };
 
 const SILENCE = ['-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100'];
 
@@ -76,12 +77,12 @@ export async function renderFilm(
   onProgress: (fraction: number) => void
 ) {
   const segments: string[] = [];
-  const total = request.moments.length + 2;
+  const total = request.moments.length + 3;
   let done = 0;
   const step = () => onProgress(++done / total);
 
   const title = join(workDir, 'title.png');
-  await writeFile(title, titleCard(request.day));
+  await writeFile(title, titleCard(request.day, request.name));
   const titleSegment = join(workDir, 'seg-title.mp4');
   await stillSegment(title, TITLE_SECONDS, titleSegment);
   segments.push(titleSegment);
@@ -92,11 +93,11 @@ export async function renderFilm(
     try {
       if (moment.kind === 'text') {
         const card = join(workDir, `text-${index}.png`);
-        await writeFile(card, textCard(moment.text, moment.clock));
+        await writeFile(card, textCard(moment.text, moment.clock, moment.vibe, index));
         await stillSegment(card, TEXT_SECONDS, segment);
       } else {
         const badge = join(workDir, `badge-${index}.png`);
-        await writeFile(badge, clockBadge(moment.clock));
+        await writeFile(badge, clockBadge(moment.clock, moment.vibe));
         if (moment.kind === 'video') await videoSegment(moment.path, moment.format, badge, segment);
         else {
           // Decode once to PNG: covers HEIC and applies EXIF rotation, and PNG loops cleanly.
@@ -114,6 +115,13 @@ export async function renderFilm(
   }
 
   if (segments.length === 1) throw new Error('none of the moments could be rendered');
+
+  const end = join(workDir, 'end.png');
+  await writeFile(end, endCard(request.name, segments.length - 1));
+  const endSegment = join(workDir, 'seg-end.mp4');
+  await stillSegment(end, END_SECONDS, endSegment);
+  segments.push(endSegment);
+  step();
 
   const list = join(workDir, 'segments.txt');
   await writeFile(list, segments.map((s) => `file '${s.replaceAll("'", "'\\''")}'`).join('\n'));

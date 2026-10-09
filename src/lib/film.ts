@@ -4,6 +4,7 @@ import { Directory, File, Paths } from 'expo-file-system';
 
 import type { Moment } from '@/lib/db';
 import { formatClock } from '@/lib/day';
+import { vibeFor } from '@/lib/vibes';
 
 const RENDER_PORT = 4000;
 const POLL_MS = 1000;
@@ -13,7 +14,13 @@ export type FilmPhase =
   | { name: 'rendering'; progress: number }
   | { name: 'downloading' };
 
-type ManifestMoment = { kind: Moment['kind']; clock: string; text?: string | null; file?: string };
+type ManifestMoment = {
+  kind: Moment['kind'];
+  clock: string;
+  vibe?: string | null;
+  text?: string | null;
+  file?: string;
+};
 
 type JobResponse = {
   id: string;
@@ -50,6 +57,7 @@ async function readJob(response: Response): Promise<JobResponse> {
  */
 export async function makeFilm(
   day: string,
+  name: string,
   moments: Moment[],
   onPhase: (phase: FilmPhase) => void,
   isCancelled: () => boolean
@@ -60,14 +68,15 @@ export async function makeFilm(
   const form = new FormData();
   const manifest = moments.flatMap((moment, index): ManifestMoment[] => {
     const clock = formatClock(moment.captured_at);
-    if (moment.kind === 'text') return [{ kind: 'text', clock, text: moment.text }];
+    const vibe = vibeFor(moment.vibe)?.label ?? null;
+    if (moment.kind === 'text') return [{ kind: 'text', clock, vibe, text: moment.text }];
     if (!moment.uri) return [];
 
     const field = `m${index}`;
     form.append(field, new File(moment.uri));
-    return [{ kind: moment.kind, clock, file: field }];
+    return [{ kind: moment.kind, clock, vibe, file: field }];
   });
-  form.append('manifest', JSON.stringify({ day, moments: manifest }));
+  form.append('manifest', JSON.stringify({ day, name, moments: manifest }));
 
   onPhase({ name: 'uploading' });
   let job = await readJob(await fetch(`${base}/films`, { method: 'POST', body: form }));

@@ -43,7 +43,8 @@ function publicJob(job: Job) {
 
 type Manifest = {
   day: string;
-  moments: { kind: string; clock: string; text?: string; file?: string }[];
+  name?: string;
+  moments: { kind: string; clock: string; vibe?: string | null; text?: string; file?: string }[];
 };
 
 function parseManifest(raw: unknown): Manifest {
@@ -106,8 +107,9 @@ async function createFilm(req: IncomingMessage, res: ServerResponse) {
   const moments: FilmMoment[] = [];
   for (const [index, m] of manifest.moments.entries()) {
     const clock = String(m.clock ?? '').slice(0, 5);
+    const vibe = typeof m.vibe === 'string' && m.vibe.trim() ? m.vibe.trim().slice(0, 12) : null;
     if (m.kind === 'text') {
-      if (m.text?.trim()) moments.push({ kind: 'text', clock, text: m.text.slice(0, 280) });
+      if (m.text?.trim()) moments.push({ kind: 'text', clock, vibe, text: m.text.slice(0, 280) });
       continue;
     }
     if (m.kind !== 'video' && m.kind !== 'photo') continue;
@@ -119,7 +121,7 @@ async function createFilm(req: IncomingMessage, res: ServerResponse) {
     if (!format) continue;
     const path = join(inputs, String(index).padStart(3, '0'));
     await writeFile(path, bytes);
-    moments.push({ kind: m.kind, clock, path, format });
+    moments.push({ kind: m.kind, clock, vibe, path, format });
   }
 
   if (moments.length === 0) {
@@ -127,12 +129,13 @@ async function createFilm(req: IncomingMessage, res: ServerResponse) {
     return send(res, 400, { error: 'no usable moments' });
   }
 
+  const name = typeof manifest.name === 'string' ? manifest.name.trim().slice(0, 30) : '';
   const job: Job = { id, status: 'rendering', progress: 0, createdAt: Date.now() };
   jobs.set(id, job);
   send(res, 202, publicJob(job));
 
   const started = Date.now();
-  renderFilm({ day: manifest.day, moments }, dir, join(dir, 'film.mp4'), (p) => (job.progress = p))
+  renderFilm({ day: manifest.day, name, moments }, dir, join(dir, 'film.mp4'), (p) => (job.progress = p))
     .then(() => {
       job.status = 'done';
       console.log(`film ${id}: ${moments.length} moments in ${((Date.now() - started) / 1000).toFixed(1)}s`);

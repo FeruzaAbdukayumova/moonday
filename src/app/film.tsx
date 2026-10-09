@@ -1,3 +1,4 @@
+import { File } from 'expo-file-system';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Sharing from 'expo-sharing';
 import { useSQLiteContext } from 'expo-sqlite';
@@ -9,9 +10,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Icon } from '@/components/icon';
 import { Moon, type MoonMood } from '@/components/moon';
 import { Button } from '@/components/ui';
-import { momentsForDay } from '@/lib/db';
+import { filmForDay, momentsForDay, saveFilm } from '@/lib/db';
 import { dayKey, formatMonthDay } from '@/lib/day';
 import { makeFilm, type FilmPhase } from '@/lib/film';
+import { useSettings } from '@/lib/settings';
 import { colors, fonts, radius, spacing } from '@/theme';
 
 type State =
@@ -43,6 +45,7 @@ export default function FilmScreen() {
   const [state, setState] = useState<State>({ name: 'uploading' });
   const [attempt, setAttempt] = useState(0);
   const [momentCount, setMomentCount] = useState(0);
+  const { settings } = useSettings();
 
   useEffect(() => {
     let cancelled = false;
@@ -51,7 +54,26 @@ export default function FilmScreen() {
       try {
         const moments = await momentsForDay(db, day);
         if (!cancelled) setMomentCount(moments.length);
-        const uri = await makeFilm(day, moments, (phase) => !cancelled && setState(phase), () => cancelled);
+        if (moments.length === 0) {
+          if (!cancelled) setState({ name: 'failed', message: 'This day has no moments yet. Catch one first!' });
+          return;
+        }
+
+        // A film that's still current plays straight away, no server round trip.
+        const saved = attempt === 0 ? await filmForDay(db, day) : null;
+        if (saved && new File(saved.uri).exists) {
+          if (!cancelled) setState({ name: 'ready', uri: saved.uri });
+          return;
+        }
+
+        const uri = await makeFilm(
+          day,
+          settings.name,
+          moments,
+          (phase) => !cancelled && setState(phase),
+          () => cancelled
+        );
+        if (uri) await saveFilm(db, day, uri, moments.length);
         if (uri && !cancelled) setState({ name: 'ready', uri });
       } catch (error) {
         console.warn('film failed', error);
@@ -67,7 +89,7 @@ export default function FilmScreen() {
     return () => {
       cancelled = true;
     };
-  }, [db, day, attempt]);
+  }, [db, day, attempt, settings.name]);
 
   const retry = useCallback(() => {
     setState({ name: 'uploading' });

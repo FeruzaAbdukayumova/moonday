@@ -1,41 +1,63 @@
-import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { Redirect, useFocusEffect, useRouter } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
-import * as VideoThumbnails from 'expo-video-thumbnails';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Alert, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Icon } from '@/components/icon';
 import { Moon, moodForMoments } from '@/components/moon';
+import { MomentRow } from '@/components/timeline';
 import { Bubble, Button } from '@/components/ui';
-import { addMoment, momentsForDay, removeMoment, type Moment } from '@/lib/db';
-import { dayKey, exifCapturedAt, formatClock, formatMonthDay, formatWeekday } from '@/lib/day';
+import { VibeSheet } from '@/components/vibe-picker';
+import {
+  addMoment,
+  daySummaries,
+  momentsForDay,
+  removeMoment,
+  setVibe,
+  type Moment,
+} from '@/lib/db';
+import {
+  DAY_START_HOUR,
+  dayKey,
+  exifCapturedAt,
+  formatClock,
+  formatHour,
+  formatMonthDay,
+  formatWeekday,
+  streak,
+} from '@/lib/day';
 import { deleteMedia, persistMedia } from '@/lib/media';
+import { scheduleReminders } from '@/lib/notify';
+import { useSettings } from '@/lib/settings';
 import { MOMENTS_FOR_FULL_MOON, colors, fonts, radius, spacing, sticker } from '@/theme';
-
-/** When the day's film is due. Scheduling it for real comes later. */
-const FILM_HOUR = 22;
-
-const TILE_COLORS = [colors.sky, colors.peach, colors.pinkLight, colors.mint, colors.lilac];
 
 export default function TodayScreen() {
   const db = useSQLiteContext();
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { settings } = useSettings();
   const [moments, setMoments] = useState<Moment[]>([]);
+  const [streakDays, setStreakDays] = useState(0);
+  const [selected, setSelected] = useState<Moment | null>(null);
   const today = dayKey();
 
   const load = useCallback(async () => {
-    setMoments(await momentsForDay(db, today));
+    const [todays, days] = await Promise.all([momentsForDay(db, today), daySummaries(db)]);
+    setMoments(todays);
+    setStreakDays(streak(new Set(days.map((d) => d.day)), today));
+    return todays;
   }, [db, today]);
 
   useFocusEffect(
     useCallback(() => {
-      load();
-    }, [load])
+      if (!settings.onboarded) return;
+      load().then((todays) => scheduleReminders(settings.filmHour, todays.length > 0));
+    }, [load, settings.onboarded, settings.filmHour])
   );
+
+  if (!settings.onboarded) return <Redirect href="/welcome" />;
 
   async function importFromGallery() {
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -65,12 +87,20 @@ export default function TodayScreen() {
         text: 'Delete',
         style: 'destructive',
         onPress: async () => {
+          setSelected(null);
           await removeMoment(db, moment.id);
           deleteMedia(moment.uri);
           load();
         },
       },
     ]);
+  }
+
+  async function changeVibe(vibe: string | null) {
+    if (!selected) return;
+    await setVibe(db, selected.id, vibe);
+    setSelected(null);
+    load();
   }
 
   const openFilm = () => router.push({ pathname: '/film', params: { day: today } });
@@ -85,23 +115,50 @@ export default function TodayScreen() {
           ListHeaderComponent={
             <>
               <View style={styles.header}>
-                <Text style={styles.weekday}>{formatWeekday(today)}</Text>
-                <Text style={styles.date}>{formatMonthDay(today)}</Text>
+                <View style={styles.headerText}>
+                  <Text style={styles.weekday}>
+                    {settings.name ? `Hey ${settings.name} · ${formatWeekday(today)}` : formatWeekday(today)}
+                  </Text>
+                  <Text style={styles.date}>{formatMonthDay(today)}</Text>
+                </View>
+                {streakDays > 1 && (
+                  <View style={styles.streak}>
+                    <Text style={styles.streakText}>{`🔥 ${streakDays}`}</Text>
+                  </View>
+                )}
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Memories"
+                  onPress={() => router.push('/memories')}
+                  style={styles.headerButton}>
+                  <Icon name="calendar" size={22} />
+                </Pressable>
               </View>
-              {moments.length > 0 && <MoonCard count={moments.length} onFilm={openFilm} />}
+              {moments.length > 0 && (
+                <MoonCard count={moments.length} filmHour={settings.filmHour} onFilm={openFilm} />
+              )}
             </>
           }
-          ListEmptyComponent={<EmptyDay />}
+          ListEmptyComponent={<EmptyDay filmHour={settings.filmHour} />}
           renderItem={({ item, index }) => (
             <MomentRow
               moment={item}
-              tint={TILE_COLORS[index % TILE_COLORS.length]}
+              index={index}
               last={index === moments.length - 1}
+              onPress={() => setSelected(item)}
               onLongPress={() => confirmDelete(item)}
             />
           )}
         />
       </SafeAreaView>
+
+      <VibeSheet
+        visible={selected !== null}
+        value={selected?.vibe ?? null}
+        onChange={changeVibe}
+        onClose={() => setSelected(null)}
+        onDelete={selected ? () => confirmDelete(selected) : undefined}
+      />
 
       <View style={[styles.dock, { bottom: 14 + insets.bottom }]}>
         <Pressable
@@ -132,7 +189,7 @@ export default function TodayScreen() {
   );
 }
 
-function EmptyDay() {
+function EmptyDay({ filmHour }: { filmHour: number }) {
   return (
     <View style={styles.empty}>
       <Bubble tilt={-2} style={styles.emptyBubble}>
@@ -141,14 +198,36 @@ function EmptyDay() {
       <Moon mood="crescent" size={170} />
       <MoonMeter count={0} />
       <Text style={styles.emptyHint}>
-        {`${MOMENTS_FOR_FULL_MOON} moments and your film is ready at 10 PM`}
+        {`${MOMENTS_FOR_FULL_MOON} moments and your film is ready at ${formatHour(filmHour)}`}
       </Text>
     </View>
   );
 }
 
-function MoonCard({ count, onFilm }: { count: number; onFilm: () => void }) {
+function MoonCard({
+  count,
+  filmHour,
+  onFilm,
+}: {
+  count: number;
+  filmHour: number;
+  onFilm: () => void;
+}) {
   const full = count >= MOMENTS_FOR_FULL_MOON;
+  const filmTime = isFilmTime(filmHour);
+
+  if (filmTime) {
+    return (
+      <Pressable accessibilityRole="button" onPress={onFilm} style={styles.revealCard}>
+        <Moon mood="wow" size={72} glow />
+        <View style={styles.moonCardText}>
+          <Text style={styles.revealTitle}>Full moon! Your film is ready</Text>
+          <Text style={styles.revealHint}>{`${count} ${count === 1 ? 'moment' : 'moments'} · tap to watch`}</Text>
+        </View>
+        <Icon name="play" size={26} color={colors.butter} />
+      </Pressable>
+    );
+  }
 
   return (
     <View style={styles.moonCard}>
@@ -159,11 +238,11 @@ function MoonCard({ count, onFilm }: { count: number; onFilm: () => void }) {
             {full ? 'Full moon!' : 'Half a moon...'} {count} {count === 1 ? 'moment' : 'moments'}
           </Text>
           <MoonMeter count={count} />
-          <Text style={styles.moonCardHint}>{filmCountdown()}</Text>
+          <Text style={styles.moonCardHint}>{filmCountdown(filmHour)}</Text>
         </View>
       </View>
       <Button
-        label={full ? "Make today's film" : 'Make the film now'}
+        label="Peek at the film now"
         tone={full ? 'pink' : 'white'}
         size="medium"
         icon={<Icon name="film" size={20} />}
@@ -182,88 +261,56 @@ function MoonMeter({ count }: { count: number }) {
   );
 }
 
-function filmCountdown(): string {
-  const now = new Date();
-  if (now.getHours() >= FILM_HOUR || now.getHours() < 4) return "It's film time";
+function isFilmTime(filmHour: number): boolean {
+  const hour = new Date().getHours();
+  return hour >= filmHour || hour < DAY_START_HOUR;
+}
 
+function filmCountdown(filmHour: number): string {
+  const now = new Date();
   const due = new Date(now);
-  due.setHours(FILM_HOUR, 0, 0, 0);
+  due.setHours(filmHour, 0, 0, 0);
   const minutes = Math.round((due.getTime() - now.getTime()) / 60000);
   const hours = Math.floor(minutes / 60);
-  return `Film at 10 PM · ${hours > 0 ? `${hours}h ` : ''}${minutes % 60}m left`;
-}
-
-function MomentRow({
-  moment,
-  tint,
-  last,
-  onLongPress,
-}: {
-  moment: Moment;
-  tint: string;
-  last: boolean;
-  onLongPress: () => void;
-}) {
-  return (
-    <Pressable style={styles.row} onLongPress={onLongPress}>
-      <View style={styles.timeColumn}>
-        <Text style={[styles.time, last && styles.timeLatest]}>
-          {formatClock(moment.captured_at)}
-        </Text>
-        {!last && <View style={styles.spine} />}
-      </View>
-      <View style={styles.rowBody}>
-        {moment.kind === 'text' ? (
-          <View style={styles.textCard}>
-            <Text style={styles.textCardText}>{moment.text}</Text>
-          </View>
-        ) : (
-          <MomentPreview moment={moment} tint={tint} />
-        )}
-      </View>
-    </Pressable>
-  );
-}
-
-function MomentPreview({ moment, tint }: { moment: Moment; tint: string }) {
-  const [thumbnail, setThumbnail] = useState<string | null>(
-    moment.kind === 'photo' ? moment.uri : null
-  );
-
-  useEffect(() => {
-    if (moment.kind !== 'video' || !moment.uri) return;
-
-    let active = true;
-    VideoThumbnails.getThumbnailAsync(moment.uri, { time: 300 })
-      .then((result) => {
-        if (active) setThumbnail(result.uri);
-      })
-      .catch(() => {
-        // Thumbnail failures are cosmetic; the tinted tile stays.
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [moment.kind, moment.uri]);
-
-  return (
-    <View style={[styles.tile, { backgroundColor: tint }]}>
-      {thumbnail && <Image source={{ uri: thumbnail }} style={styles.tileImage} contentFit="cover" />}
-      {moment.kind === 'video' && (
-        <View style={styles.playBadge}>
-          <Icon name="play" size={16} />
-        </View>
-      )}
-    </View>
-  );
+  return `Film at ${formatHour(filmHour)} · ${hours > 0 ? `${hours}h ` : ''}${minutes % 60}m left`;
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   safeArea: { flex: 1 },
   list: { paddingHorizontal: 22, paddingBottom: 140, flexGrow: 1 },
-  header: { paddingTop: spacing.md, paddingBottom: spacing.md },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingTop: spacing.md, paddingBottom: spacing.md },
+  headerText: { flex: 1 },
+  headerButton: {
+    ...sticker(3),
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: colors.card,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  streak: {
+    ...sticker(3),
+    height: 40,
+    paddingHorizontal: 12,
+    borderRadius: radius.pill,
+    backgroundColor: colors.butter,
+    justifyContent: 'center',
+  },
+  streakText: { fontFamily: fonts.display, fontSize: 16, color: colors.ink },
+  revealCard: {
+    ...sticker(5),
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: colors.night,
+    borderRadius: radius.lg,
+    padding: 14,
+    marginBottom: spacing.lg,
+  },
+  revealTitle: { fontFamily: fonts.display, fontSize: 19, color: colors.butter },
+  revealHint: { fontFamily: fonts.bodyMedium, fontSize: 13, color: colors.bg },
   weekday: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.inkSoft },
   date: { fontFamily: fonts.display, fontSize: 32, color: colors.ink, letterSpacing: -0.6 },
 
@@ -296,53 +343,6 @@ const styles = StyleSheet.create({
   },
   meterFill: { height: '100%', backgroundColor: colors.butter },
 
-  row: { flexDirection: 'row', minHeight: 60 },
-  timeColumn: { width: 58, alignItems: 'center' },
-  time: {
-    fontFamily: fonts.display,
-    fontSize: 13,
-    color: colors.ink,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 8,
-    overflow: 'hidden',
-  },
-  timeLatest: { backgroundColor: colors.pink },
-  spine: { flex: 1, width: 3, borderRadius: 2, backgroundColor: colors.ink, marginVertical: 6 },
-  rowBody: { flex: 1, paddingBottom: spacing.md },
-
-  textCard: {
-    ...sticker(4),
-    backgroundColor: colors.card,
-    borderRadius: radius.lg,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    transform: [{ rotate: '-1deg' }],
-  },
-  textCardText: { fontFamily: fonts.displayBold, fontSize: 17, lineHeight: 22, color: colors.ink },
-
-  tile: {
-    width: 150,
-    height: 200,
-    borderRadius: radius.md,
-    borderWidth: 2.5,
-    borderColor: colors.ink,
-    overflow: 'hidden',
-  },
-  tileImage: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
-  playBadge: {
-    position: 'absolute',
-    left: 8,
-    bottom: 8,
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: colors.card,
-    borderWidth: 2,
-    borderColor: colors.ink,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
 
   dock: {
     position: 'absolute',

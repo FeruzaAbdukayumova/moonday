@@ -57,3 +57,6 @@ export const MAX_CLIP_SECONDS = 6;
 
 /** Moments needed before the moon is full and the film is worth making. */
 export const MOMENTS_FOR_FULL_MOON = 3;
+
+/** Film times offered in onboarding and settings. */
+export const FILM_HOURS = [20, 21, 22, 23];

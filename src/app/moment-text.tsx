@@ -14,6 +14,7 @@ import {
 import { Icon } from '@/components/icon';
 import { Moon } from '@/components/moon';
 import { Button, Chip } from '@/components/ui';
+import { VibeChips } from '@/components/vibe-picker';
 import { addMoment } from '@/lib/db';
 import { formatClock } from '@/lib/day';
 import { colors, fonts, radius, spacing, sticker } from '@/theme';
@@ -25,13 +26,14 @@ export default function TextMomentScreen() {
   const router = useRouter();
   const [text, setText] = useState('');
   const [now] = useState(() => Date.now());
+  const [vibe, setVibe] = useState<string | null>(null);
   const empty = !text.trim();
 
   async function save() {
     const trimmed = text.trim();
     if (!trimmed) return;
 
-    await addMoment(db, { kind: 'text', text: trimmed, capturedAt: now });
+    await addMoment(db, { kind: 'text', text: trimmed, capturedAt: now, vibe });
     router.back();
   }
 
@@ -68,6 +70,8 @@ export default function TextMomentScreen() {
         />
         <Text style={styles.counter}>{MAX_LENGTH - text.length}</Text>
       </View>
+
+      <VibeChips value={vibe} onChange={setVibe} />
 
       <Button label="Add to today" onPress={save} disabled={empty} style={styles.save} />
     </KeyboardAvoidingView>
