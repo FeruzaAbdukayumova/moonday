@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "bugun",
+    "name": "Moonday",
     "slug": "bugun",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -39,15 +39,15 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Bugun uses your camera to capture short moments from your day.",
-          "microphonePermission": "Bugun uses your microphone to record sound with your video moments.",
+          "cameraPermission": "Moonday uses your camera to capture short moments from your day.",
+          "microphonePermission": "Moonday uses your microphone to record sound with your video moments.",
           "recordAudioAndroid": true
         }
       ],
       [
         "expo-image-picker",
         {
-          "photosPermission": "Bugun reads photos and videos you pick to add them to your day."
+          "photosPermission": "Moonday reads photos and videos you pick to add them to your day."
         }
       ],
       "expo-notifications"
