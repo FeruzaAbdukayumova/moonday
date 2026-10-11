@@ -5,6 +5,7 @@ import {
   type CameraType,
 } from 'expo-camera';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Gyroscope } from 'expo-sensors';
 import { useSQLiteContext } from 'expo-sqlite';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
@@ -15,13 +16,18 @@ import { Moon } from '@/components/moon';
 import { Bubble, Button } from '@/components/ui';
 import { VibeChips } from '@/components/vibe-picker';
 import { addMoment } from '@/lib/db';
+import { dayKey } from '@/lib/day';
 import { persistMedia } from '@/lib/media';
+import { CAMERA_TIPS, shotFor } from '@/lib/shots';
 import { MAX_CLIP_SECONDS, colors, fonts, radius, spacing } from '@/theme';
 
 export default function CaptureScreen() {
   const db = useSQLiteContext();
   const router = useRouter();
-  const params = useLocalSearchParams<{ mode?: string }>();
+  const params = useLocalSearchParams<{ mode?: string; shot?: string }>();
+  const shot = shotFor(params.shot, dayKey());
+  const [tip] = useState(() => CAMERA_TIPS[Math.floor(Math.random() * CAMERA_TIPS.length)]);
+  const [grid, setGrid] = useState(true);
 
   const [mode, setMode] = useState<'video' | 'picture'>(
     params.mode === 'picture' ? 'picture' : 'video'
@@ -34,6 +40,7 @@ export default function CaptureScreen() {
   const [recordingSince, setRecordingSince] = useState(0);
   const [now, setNow] = useState(0);
   const cameraRef = useRef<CameraView>(null);
+  const shaky = useShake(recording);
 
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [microphonePermission, requestMicrophonePermission] = useMicrophonePermissions();
@@ -91,7 +98,7 @@ export default function CaptureScreen() {
       if (video?.uri) {
         setSaving(true);
         const uri = await persistMedia(video.uri, 'video');
-        await addMoment(db, { kind: 'video', uri, vibe });
+        await addMoment(db, { kind: 'video', uri, vibe, shot: params.shot });
         router.back();
       }
     } finally {
@@ -108,7 +115,7 @@ export default function CaptureScreen() {
       const photo = await cameraRef.current.takePictureAsync({ quality: 0.8 });
       if (photo?.uri) {
         const uri = await persistMedia(photo.uri, 'photo');
-        await addMoment(db, { kind: 'photo', uri, vibe });
+        await addMoment(db, { kind: 'photo', uri, vibe, shot: params.shot });
         router.back();
       }
     } finally {
@@ -125,27 +132,54 @@ export default function CaptureScreen() {
         mode={mode}
         onCameraReady={() => setReady(true)}
       />
+      {grid && <ThirdsGrid />}
 
       <SafeAreaView style={styles.overlay} edges={['top', 'bottom']}>
-        <View style={styles.topBar}>
-          <RoundButton label="Close" onPress={() => router.back()}>
-            <Icon name="close" size={24} color={colors.bg} />
-          </RoundButton>
-          {mode === 'video' && (
-            <View style={[styles.timer, recording && styles.timerLive]}>
-              <View style={[styles.timerDot, recording && styles.timerDotLive]} />
-              <Text style={[styles.timerText, recording && styles.timerTextLive]}>{`0:0${seconds} / 0:0${MAX_CLIP_SECONDS}`}</Text>
+        <View style={styles.top}>
+          <View style={styles.topBar}>
+            <RoundButton label="Close" onPress={() => router.back()}>
+              <Icon name="close" size={24} color={colors.bg} />
+            </RoundButton>
+            {mode === 'video' && (
+              <View style={[styles.timer, recording && styles.timerLive]}>
+                <View style={[styles.timerDot, recording && styles.timerDotLive]} />
+                <Text style={[styles.timerText, recording && styles.timerTextLive]}>{`0:0${seconds} / 0:0${MAX_CLIP_SECONDS}`}</Text>
+              </View>
+            )}
+            <View style={styles.topRight}>
+              <RoundButton label={grid ? 'Hide grid' : 'Show grid'} onPress={() => setGrid(!grid)}>
+                <Icon name="grid" size={22} color={grid ? colors.butter : colors.bg} />
+              </RoundButton>
+              <RoundButton
+                label="Flip camera"
+                onPress={() => setFacing(facing === 'back' ? 'front' : 'back')}>
+                <Icon name="flip" size={22} color={colors.bg} />
+              </RoundButton>
+            </View>
+          </View>
+
+          {!recording && (
+            <View style={styles.shotCard}>
+              {shot ? (
+                <>
+                  <Text style={styles.shotWhat}>{`🎬 ${shot.what}`}</Text>
+                  <Text style={styles.shotHow}>{shot.how}</Text>
+                </>
+              ) : (
+                <Text style={styles.shotHow}>{`💡 ${tip}`}</Text>
+              )}
             </View>
           )}
-          <RoundButton
-            label="Flip camera"
-            onPress={() => setFacing(facing === 'back' ? 'front' : 'back')}>
-            <Icon name="flip" size={22} color={colors.bg} />
-          </RoundButton>
         </View>
 
         <View style={styles.bottom}>
-          {recording && seconds >= 2 && (
+          {recording && shaky && (
+            <Bubble style={styles.cheer}>Whoa, slower... smooth like butter 🧈</Bubble>
+          )}
+          {recording && !shaky && seconds < 2 && (
+            <Bubble style={styles.cheer}>Hold it still...</Bubble>
+          )}
+          {recording && !shaky && seconds >= 2 && (
             <Bubble style={styles.cheer}>Ooh, Oscar material.</Bubble>
           )}
 
@@ -171,6 +205,42 @@ export default function CaptureScreen() {
       </SafeAreaView>
     </View>
   );
+}
+
+/** Rule-of-thirds lines: put the main thing on a line, not dead center. */
+function ThirdsGrid() {
+  return (
+    <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+      <View style={[styles.gridLine, styles.gridV, { left: '33.33%' }]} />
+      <View style={[styles.gridLine, styles.gridV, { left: '66.66%' }]} />
+      <View style={[styles.gridLine, styles.gridH, { top: '33.33%' }]} />
+      <View style={[styles.gridLine, styles.gridH, { top: '66.66%' }]} />
+    </View>
+  );
+}
+
+/** Rotation speed (rad/s) above which a clip starts to look shaky. */
+const SHAKE_LIMIT = 1.2;
+
+/** True while the phone turns too fast to film smoothly. Listens only while recording. */
+function useShake(active: boolean): boolean {
+  const [shaky, setShaky] = useState(false);
+
+  useEffect(() => {
+    if (!active) return;
+    let smoothed = 0;
+    Gyroscope.setUpdateInterval(100);
+    const subscription = Gyroscope.addListener(({ x, y, z }) => {
+      smoothed = smoothed * 0.7 + Math.hypot(x, y, z) * 0.3;
+      setShaky(smoothed > SHAKE_LIMIT);
+    });
+    return () => {
+      subscription.remove();
+      setShaky(false);
+    };
+  }, [active]);
+
+  return active && shaky;
 }
 
 function RoundButton({
@@ -215,6 +285,21 @@ function ModeTab({
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.night },
   overlay: { flex: 1, justifyContent: 'space-between' },
+  top: { gap: spacing.md },
+  topRight: { flexDirection: 'row', gap: 10 },
+  shotCard: {
+    marginHorizontal: 18,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 12,
+    borderRadius: radius.lg,
+    backgroundColor: 'rgba(37,33,58,0.7)',
+    gap: 2,
+  },
+  shotWhat: { fontFamily: fonts.display, fontSize: 18, color: colors.butter },
+  shotHow: { fontFamily: fonts.bodyMedium, fontSize: 14, lineHeight: 19, color: colors.bg },
+  gridLine: { position: 'absolute', backgroundColor: 'rgba(253,247,251,0.35)' },
+  gridV: { top: 0, bottom: 0, width: StyleSheet.hairlineWidth * 2 },
+  gridH: { left: 0, right: 0, height: StyleSheet.hairlineWidth * 2 },
   topBar: {
     flexDirection: 'row',
     alignItems: 'center',

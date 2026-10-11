@@ -14,6 +14,7 @@ export type Moment = {
   day: string;
   created_at: number;
   vibe: string | null;
+  shot: string | null;
 };
 
 export type Film = { day: string; uri: string; moment_count: number; created_at: number };
@@ -60,6 +61,14 @@ export async function migrate(db: SQLiteDatabase) {
       PRAGMA user_version = 2;
     `);
   }
+
+  if (version < 3) {
+    await db.execAsync(`
+      ALTER TABLE moments ADD COLUMN shot TEXT;
+
+      PRAGMA user_version = 3;
+    `);
+  }
 }
 
 export async function addMoment(
@@ -70,18 +79,20 @@ export async function addMoment(
     text?: string | null;
     capturedAt?: number;
     vibe?: string | null;
+    shot?: string | null;
   }
 ): Promise<number> {
   const capturedAt = input.capturedAt ?? Date.now();
   const result = await db.runAsync(
-    'INSERT INTO moments (kind, uri, text, captured_at, day, created_at, vibe) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    'INSERT INTO moments (kind, uri, text, captured_at, day, created_at, vibe, shot) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     input.kind,
     input.uri ?? null,
     input.text ?? null,
     capturedAt,
     dayKey(new Date(capturedAt)),
     Date.now(),
-    input.vibe ?? null
+    input.vibe ?? null,
+    input.shot ?? null
   );
   await forgetFilm(db, dayKey(new Date(capturedAt)));
   if (dayKey(new Date(capturedAt)) === dayKey()) cancelTodaysNudge();
@@ -140,6 +151,20 @@ export async function saveFilm(db: SQLiteDatabase, day: string, uri: string, mom
     momentCount,
     Date.now()
   );
+}
+
+/** The day plan picked for a day (cozy, walk...), kept in settings as `plan:<day>`. */
+export async function dayPlanFor(db: SQLiteDatabase, day: string): Promise<string | null> {
+  const row = await db.getFirstAsync<{ value: string }>('SELECT value FROM settings WHERE key = ?', `plan:${day}`);
+  return row?.value ?? null;
+}
+
+export async function setDayPlan(db: SQLiteDatabase, day: string, plan: string | null) {
+  if (plan) {
+    await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', `plan:${day}`, plan);
+  } else {
+    await db.runAsync('DELETE FROM settings WHERE key = ?', `plan:${day}`);
+  }
 }
 
 export type Settings = { name: string; filmHour: number; onboarded: boolean };

@@ -7,14 +7,17 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { Icon } from '@/components/icon';
 import { Moon, moodForMoments } from '@/components/moon';
+import { ShotIdeas } from '@/components/shot-ideas';
 import { MomentRow } from '@/components/timeline';
 import { Bubble, Button } from '@/components/ui';
 import { VibeSheet } from '@/components/vibe-picker';
 import {
   addMoment,
+  dayPlanFor,
   daySummaries,
   momentsForDay,
   removeMoment,
+  setDayPlan,
   setVibe,
   type Moment,
 } from '@/lib/db';
@@ -41,11 +44,17 @@ export default function TodayScreen() {
   const [moments, setMoments] = useState<Moment[]>([]);
   const [streakDays, setStreakDays] = useState(0);
   const [selected, setSelected] = useState<Moment | null>(null);
+  const [plan, setPlan] = useState<string | null>(null);
   const today = dayKey();
 
   const load = useCallback(async () => {
-    const [todays, days] = await Promise.all([momentsForDay(db, today), daySummaries(db)]);
+    const [todays, days, todaysPlan] = await Promise.all([
+      momentsForDay(db, today),
+      daySummaries(db),
+      dayPlanFor(db, today),
+    ]);
     setMoments(todays);
+    setPlan(todaysPlan);
     setStreakDays(streak(new Set(days.map((d) => d.day)), today));
     return todays;
   }, [db, today]);
@@ -103,6 +112,13 @@ export default function TodayScreen() {
     load();
   }
 
+  async function pickPlan(next: string | null) {
+    setPlan(next);
+    await setDayPlan(db, today, next);
+  }
+
+  const doneShots = new Set(moments.flatMap((m) => (m.shot ? [m.shot] : [])));
+
   const openFilm = () => router.push({ pathname: '/film', params: { day: today } });
 
   return (
@@ -137,6 +153,13 @@ export default function TodayScreen() {
               {moments.length > 0 && (
                 <MoonCard count={moments.length} filmHour={settings.filmHour} onFilm={openFilm} />
               )}
+              <ShotIdeas
+                day={today}
+                plan={plan}
+                doneShots={doneShots}
+                onPickPlan={pickPlan}
+                onShoot={(shot) => router.push({ pathname: '/capture', params: { mode: 'video', shot } })}
+              />
             </>
           }
           ListEmptyComponent={<EmptyDay filmHour={settings.filmHour} />}

@@ -16,7 +16,8 @@ export type IconName =
   | 'calendar'
   | 'gear'
   | 'bell'
-  | 'check';
+  | 'check'
+  | 'grid';
 
 /** Stroke icons drawn the same on iOS and Android. */
 export function Icon({
@@ -72,6 +73,12 @@ export function Icon({
             d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8"
             {...stroke}
           />
+        </>
+      )}
+      {name === 'grid' && (
+        <>
+          <Rect x={3.5} y={3.5} width={17} height={17} rx={3} {...stroke} />
+          <Path d="M9.2 3.5v17M14.8 3.5v17M3.5 9.2h17M3.5 14.8h17" {...stroke} />
         </>
       )}
       {name === 'bell' && (
