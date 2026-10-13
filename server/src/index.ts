@@ -197,5 +197,5 @@ setInterval(async () => {
 await rm(DATA_DIR, { recursive: true, force: true });
 await mkdir(DATA_DIR, { recursive: true });
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`bugun render service on :${PORT}`);
+  console.log(`moonday render service on :${PORT}`);
 });
